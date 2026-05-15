@@ -1,246 +1,276 @@
+"""
+B站视频批量管理工具 - 主程序
+
+支持批量将视频设为私密/公开，按年份筛选等操作。
+
+作者: Bilibili Manager Team
+版本: 1.1.0
+"""
+
+__version__ = "1.1.0"
+__author__ = "Bilibili Manager Team"
+__license__ = "MIT"
+
 import sys
-import time
 import os
-from selenium import webdriver
-from selenium.webdriver.chrome.service import Service
-from selenium.webdriver.chrome.options import Options
-from webdriver_manager.chrome import ChromeDriverManager
-from colorama import init, Fore, Style
+import time
+from typing import List, Dict, Optional
 
-from scraper import BilibiliScraper
-from permission import BilibiliPermission
+from scraper import BilibiliScraper, VideoCache
+from date_parser import BilibiliDateParser
 from ui import BilibiliUI
-from logger import logger
-
-# 初始化colorama
-init(autoreset=True)
 
 
-class BilibiliVideoHider:
+class BilibiliVideoManager:
+    """B站视频管理器主类"""
+    
     def __init__(self):
-        self.driver = None
-        self.scraper = None
-        self.permission = None
+        """初始化主程序"""
         self.ui = BilibiliUI()
-        self.videos = []
-
-    def setup_driver(self):
-        """和小红书工具一样的启动方式"""
+        self.scraper: Optional[BilibiliScraper] = None
+        self.date_parser = BilibiliDateParser()
+        self.videos_cache: Optional[List[Dict]] = None
+    
+    def run(self) -> None:
+        """运行主程序"""
         try:
-            print(f"{Fore.CYAN}正在启动浏览器...")
-
-            chrome_options = Options()
-            chrome_options.add_argument('--no-sandbox')
-            chrome_options.add_argument('--disable-dev-shm-usage')
-            chrome_options.add_argument('--disable-blink-features=AutomationControlled')
-            chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
-            chrome_options.add_experimental_option('useAutomationExtension', False)
-
-            # 不自动关闭浏览器 (和小红书工具一样)
-            chrome_options.add_experimental_option("detach", True)
-
-            # 方法1: 先尝试用本地chromedriver (如果你手动下载了)
-            if os.path.exists('chromedriver.exe'):
-                print(f"{Fore.GREEN}使用本地ChromeDriver...")
-                service = Service('chromedriver.exe')
-            else:
-                # 方法2: 使用webdriver_manager (和小红书工具完全一样)
-                print(f"{Fore.GREEN}自动下载ChromeDriver...")
-                service = Service(ChromeDriverManager().install())
-
-            self.driver = webdriver.Chrome(service=service, options=chrome_options)
-            self.driver.maximize_window()
-
-            print(f"{Fore.GREEN}浏览器启动成功!")
-            logger.info("浏览器驱动初始化成功")
-            return True
-
-        except Exception as e:
-            logger.error(f"浏览器驱动初始化失败: {e}")
-            print(f"{Fore.RED}启动失败: {e}")
-            print(f"{Fore.YELLOW}解决方法:")
-            print(f"{Fore.WHITE}1. 确保Chrome浏览器已安装")
-            print(f"{Fore.WHITE}2. 手动下载chromedriver.exe放到程序目录")
-            print(f"{Fore.CYAN}   下载地址: https://chromedriver.chromium.org/")
-            print(f"{Fore.WHITE}3. 检查Chrome版本和chromedriver版本是否匹配")
-            return False
-
-    def login(self):
-        """登录B站 - 和小红书工具一样的逻辑"""
-        try:
-            print(f"\n{Fore.CYAN}打开登录页面...")
-            self.driver.get("https://passport.bilibili.com/login")
-
-            print(f"{Fore.YELLOW}请在浏览器中登录B站")
-            print(f"{Fore.GREEN}登录成功后按回车键继续...")
-            input()
-
-            # 转到创作中心
-            print(f"{Fore.CYAN}转到创作中心...")
-            self.driver.get("https://member.bilibili.com/platform/content/video")
-            time.sleep(3)
-
-            # 检查登录状态
-            if "login" not in self.driver.current_url.lower():
-                print(f"{Fore.GREEN}登录成功!")
-                logger.info("登录成功")
-                return True
-            else:
-                print(f"{Fore.RED}登录失败，请重试")
-                logger.error("登录失败")
-                return False
-
-        except Exception as e:
-            logger.error(f"登录出错: {e}")
-            print(f"{Fore.RED}登录出错: {e}")
-            return False
-
-    def run(self):
-        """主流程 - 和小红书工具完全一样的结构"""
-        self.ui.print_banner()
-
-        # 启动浏览器
-        if not self.setup_driver():
-            return
-
-        # 登录
-        if not self.login():
-            self.driver.quit()
-            return
-
-        # 初始化其他模块
-        self.scraper = BilibiliScraper(self.driver)
-        self.permission = BilibiliPermission(self.driver)
-
-        # 主循环
-        while True:
-            try:
-                self.ui.show_menu()
-                choice = self.ui.get_choice()
-
-                if choice == '1':
-                    self.mode_filter_by_year()
-                elif choice == '2':
-                    self.mode_manual_select()
-                elif choice == '3':
-                    self.mode_view_only()
-                elif choice == '4':
-                    self.quit()
+            self.ui.print_header()
+            print("程序启动")
+            
+            while True:
+                mode = self.ui.get_operation_mode()
+                
+                if mode == 'exit':
+                    self.ui.print_info("程序退出")
                     break
-
-            except KeyboardInterrupt:
-                print(f"\n{Fore.YELLOW}操作已取消")
-                break
-            except Exception as e:
-                logger.error(f"运行错误: {e}")
-                print(f"{Fore.RED}错误: {e}")
-
-    def load_videos(self):
-        """加载视频列表"""
-        if not self.videos:
-            print(f"\n{Fore.CYAN}正在获取视频列表...")
-            self.videos = self.scraper.get_video_list()
-
-            if self.videos:
-                print(f"{Fore.GREEN}找到 {len(self.videos)} 个视频")
-            else:
-                print(f"{Fore.RED}未找到视频")
-
-        return self.videos
-
-    def mode_filter_by_year(self):
-        """按年份筛选模式"""
-        videos = self.load_videos()
-        if not videos:
-            return
-
-        # 统计年份
-        years = {}
-        for v in videos:
-            year = v.get('year', '未知')
-            years[year] = years.get(year, 0) + 1
-
-        # 显示年份统计
-        print(f"\n{Fore.CYAN}年份统计:")
-        for year, count in sorted(years.items()):
-            print(f"{Fore.WHITE}  {year}年: {count}个视频")
-
-        # 选择年份
-        try:
-            year_choice = input(f"\n{Fore.YELLOW}输入要隐藏的年份 (如2024): ").strip()
-            if not year_choice.isdigit():
-                print(f"{Fore.RED}无效的年份")
-                return
-
-            year_choice = int(year_choice)
-            target_videos = [v for v in videos if v.get('year') == year_choice]
-
-            if not target_videos:
-                print(f"{Fore.RED}没有{year_choice}年的视频")
-                return
-
-            # 显示并确认
-            print(f"\n{Fore.GREEN}找到 {len(target_videos)} 个{year_choice}年的视频:")
-            for i, v in enumerate(target_videos, 1):
-                print(f"{Fore.WHITE}  [{i}] {v['title']}")
-
-            if self.ui.confirm_action(target_videos):
-                self.permission.hide_videos(target_videos)
-
+                elif mode == 'view':
+                    self._view_videos_mode()
+                elif mode == 'refresh':
+                    self._refresh_videos_mode()
+                elif mode == 'year_private':
+                    self._year_filter_mode('private')
+                elif mode == 'manual_private':
+                    self._manual_select_mode('private')
+                elif mode == 'year_public':
+                    self._year_filter_mode('public')
+                elif mode == 'manual_public':
+                    self._manual_select_mode('public')
+                
+                if mode != 'exit':
+                    self.ui.wait_for_enter()
+                    self.ui.print_header()
+                    
         except KeyboardInterrupt:
-            print(f"\n{Fore.YELLOW}已取消")
-
-    def mode_manual_select(self):
-        """手动选择模式"""
-        videos = self.load_videos()
-        if not videos:
-            return
-
-        # 显示所有视频
-        print(f"\n{Fore.CYAN}全部视频 ({len(videos)}个):")
-        for i, v in enumerate(videos, 1):
-            print(f"{Fore.WHITE}  [{i}] {v['title'][:50]} - {v.get('published_date', '未知')}")
-
-        # 获取选择
-        print(f"\n{Fore.YELLOW}选择方式: 1,3,5 或 1-5 或 all")
-        try:
-            choice = input(f"{Fore.CYAN}请选择: ").strip().lower()
-
-            if choice == 'all':
-                selected = videos
-            else:
-                # 解析选择
-                indices = set()
-                parts = choice.split(',')
-                for part in parts:
-                    part = part.strip()
-                    if '-' in part:
-                        start, end = map(int, part.split('-'))
-                        indices.update(range(start - 1, end))
-                    else:
-                        indices.add(int(part) - 1)
-
-                selected = [videos[i] for i in sorted(indices) if 0 <= i < len(videos)]
-
-            if selected and self.ui.confirm_action(selected):
-                self.permission.hide_videos(selected)
-
-        except KeyboardInterrupt:
-            print(f"\n{Fore.YELLOW}已取消")
-
-    def mode_view_only(self):
-        """仅查看模式"""
-        videos = self.load_videos()
+            self.ui.print_warning("程序被用户中断")
+        except Exception as e:
+            self.ui.print_error(f"程序运行出错: {e}")
+        finally:
+            self._cleanup()
+    
+    def _view_videos_mode(self) -> None:
+        """查看视频列表模式"""
+        videos = self._extract_videos()
         if videos:
-            print(f"\n{Fore.CYAN}视频列表:")
-            for i, v in enumerate(videos, 1):
-                print(f"{Fore.WHITE}  [{i}] {v['title']}")
-                print(f"{Fore.CYAN}      日期: {v.get('published_date', '未知')} | BV号: {v.get('bv', '未知')}")
+            self.ui.display_videos_summary(videos, "所有视频")
+            
+            # 显示年份统计
+            available_years = self.date_parser.get_available_years(videos)
+            if available_years:
+                self.ui.print_info("年份统计:")
+                for year in available_years:
+                    year_videos = self.date_parser.filter_by_year(videos, year)
+                    self.ui.print_info(f"  {year}年: {len(year_videos)} 条")
+        else:
+            self.ui.print_error("没有找到视频")
+    
+    def _refresh_videos_mode(self) -> None:
+        """刷新视频列表模式"""
+        self.ui.print_info("正在刷新视频列表...")
+        self.videos_cache = None
+        VideoCache.clear_cache()
+        
+        videos = self._extract_videos()
+        if videos:
+            self.ui.print_success(f"刷新完成，共提取 {len(videos)} 条视频")
+            self.ui.display_videos_summary(videos, "刷新后的视频")
+            
+            available_years = self.date_parser.get_available_years(videos)
+            if available_years:
+                self.ui.print_info("年份统计:")
+                for year in available_years:
+                    year_videos = self.date_parser.filter_by_year(videos, year)
+                    self.ui.print_info(f"  {year}年: {len(year_videos)} 条")
+        else:
+            self.ui.print_error("刷新后没有找到视频")
+    
+    def _year_filter_mode(self, operation: str = 'private') -> None:
+        """按年份筛选模式"""
+        videos = self._extract_videos()
+        if not videos:
+            self.ui.print_error("没有找到视频")
+            return
+        
+        available_years = self.date_parser.get_available_years(videos)
+        if not available_years:
+            self.ui.print_error("没有找到有效的日期信息")
+            return
+        
+        selected_year = self.ui.select_year(available_years)
+        if not selected_year:
+            return
+        
+        filtered_videos = self.date_parser.filter_by_year(videos, selected_year)
+        if not filtered_videos:
+            self.ui.print_info(f"{selected_year}年没有视频")
+            return
+        
+        operation_text = "设为私密" if operation == 'private' else "设为公开"
+        self.ui.print_info(f"找到 {selected_year}年的视频 {len(filtered_videos)} 条")
+        self.ui.display_videos_summary(filtered_videos, f"{selected_year}年的视频")
+        
+        if self.ui.confirm_batch_operation(filtered_videos, operation):
+            self._execute_operation(filtered_videos, operation)
+    
+    def _manual_select_mode(self, operation: str = 'private') -> None:
+        """手动选择模式"""
+        videos = self._extract_videos()
+        if not videos:
+            self.ui.print_error("没有找到视频")
+            return
+        
+        selected_videos = self.ui.select_videos_manually(videos)
+        if not selected_videos:
+            self.ui.print_info("没有选择任何视频")
+            return
+        
+        operation_text = "设为私密" if operation == 'private' else "设为公开"
+        self.ui.print_info(f"已选择 {len(selected_videos)} 条视频进行{operation_text}")
+        
+        if self.ui.confirm_batch_operation(selected_videos, operation):
+            self._execute_operation(selected_videos, operation)
+    
+    def _extract_videos(self, force_refresh: bool = False) -> List[Dict]:
+        """提取视频数据
+        
+        Args:
+            force_refresh: 是否强制刷新（忽略内存缓存）
+        """
+        try:
+            # 检查文件缓存
+            if not force_refresh:
+                cached_info = VideoCache.get_cache_info()
+                if cached_info:
+                    self.ui.print_info(f"发现本地缓存: {cached_info['count']} 条视频 (缓存时间: {cached_info['cached_at']})")
+            
+            # 检查内存缓存
+            if not force_refresh and self.videos_cache is not None:
+                self.ui.print_info(f"使用内存缓存的视频数据，共 {len(self.videos_cache)} 条")
+                return self.videos_cache
+            
+            # 检查是否有可用缓存文件
+            if not force_refresh:
+                cached_videos = VideoCache.load_videos()
+                if cached_videos:
+                    self.videos_cache = cached_videos
+                    self.ui.print_success(f"从缓存加载 {len(cached_videos)} 条视频")
+                    return cached_videos
+            
+            # 需要重新抓取
+            if self.scraper and self.scraper.driver:
+                try:
+                    self.scraper.driver.current_url
+                    self.ui.print_info("检测到现有Chrome会话，复用现有连接...")
+                except:
+                    self.ui.print_warning("现有Chrome会话无效")
+                    self.scraper = None
+            
+            if not self.scraper:
+                self.ui.print_info("正在启动浏览器...")
+                self.scraper = BilibiliScraper(headless=False)
+                self.scraper.setup_driver()
+            
+            # 使用新的分页提取方法（会自动保存缓存）
+            videos = self.scraper.extract_all_videos()
+            
+            if videos:
+                self.ui.print_success(f"成功提取 {len(videos)} 条视频")
+                self.videos_cache = videos
+            else:
+                self.ui.print_error("没有提取到视频")
+            
+            return videos
+                
+        except Exception as e:
+            self.ui.print_error(f"提取视频失败: {e}")
+            return []
+    
+    def _execute_operation(self, videos: List[Dict], operation: str = 'private') -> None:
+        """执行操作（设为私密/公开）"""
+        if not self.scraper or not self.scraper.driver:
+            self.ui.print_error("浏览器连接已断开，请重新提取视频")
+            return
+        
+        try:
+            total = len(videos)
+            success = 0
+            failed = 0
+            
+            self.ui.print_info(f"处理 {total} 个视频...")
+            
+            for i, video in enumerate(videos, 1):
+                title = video.get('title', '未知')
+                short_title = title[:30]
+                
+                try:
+                    # 使用标题直接查找并操作
+                    if operation == 'private':
+                        result = self.scraper.set_video_private_by_title(title)
+                    else:
+                        result = self.scraper.set_video_public_by_title(title)
+                    
+                    if result:
+                        success += 1
+                        self.ui.print_success(f"[{i}/{total}] {short_title}")
+                    else:
+                        failed += 1
+                        self.ui.print_error(f"[{i}/{total}] {short_title}")
+                    
+                    time.sleep(1)  # 避免操作过快
+                    
+                except Exception as e:
+                    failed += 1
+                    self.ui.print_error(f"[{i}/{total}] {short_title} - {e}")
+            
+            results = {'total': total, 'success': success, 'failed': failed}
+            self.ui.display_operation_results(results)
+            
+        except Exception as e:
+            self.ui.print_error(f"执行操作失败: {e}")
+    
+    def _cleanup(self) -> None:
+        """清理资源"""
+        try:
+            if self.scraper:
+                # 不自动关闭浏览器，保持复用
+                pass
+        except Exception as e:
+            print(f"清理资源时发生错误: {e}")
 
-    def quit(self):
-        """退出"""
-        print(f"\n{Fore.CYAN}正在关闭浏览器...")
-        if self.driver:
-            self.driver.quit()
-        print(f"{Fore.GREEN}已退出，再见!")
 
+def main():
+    """主函数"""
+    try:
+        if sys.version_info < (3, 7):
+            print("错误: 需要Python 3.7或更高版本")
+            sys.exit(1)
+        
+        hider = BilibiliVideoManager()
+        hider.run()
+        
+    except Exception as e:
+        print(f"程序启动失败: {e}")
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()
